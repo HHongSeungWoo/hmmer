@@ -150,7 +150,8 @@ static int  serial_master(ESL_GETOPTS *go, struct cfg_s *cfg);
 static int  serial_loop  (WORKER_INFO *info, ESL_SQFILE *dbfp, int n_targetseqs);
 
 #ifdef HMMER_THREADS
-#define BLOCK_SIZE 1000
+#define BLOCK_SIZE 1000 
+// 블록사이즈 조정
 
 static int  thread_loop(ESL_THREADS *obj, ESL_WORK_QUEUE *queue, ESL_SQFILE *dbfp, int n_targetseqs);
 static void pipeline_thread(void *arg);
