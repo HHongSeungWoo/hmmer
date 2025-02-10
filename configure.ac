@@ -77,7 +77,7 @@ m4_include([easel/m4/esl_pic_flags.m4])
 # 2. AC_INIT
 ################################################################
 
-AC_INIT([HMMER],[3.4],[sean@eddylab.org],[hmmer])
+AC_INIT([HMMER],[3.4-HITS],[sean@eddylab.org],[hmmer])
 AC_MSG_NOTICE([Configuring HMMER3 for your system.])
 
 # remember if the user is overriding CFLAGS
@@ -109,7 +109,7 @@ fi
 # to use HMMER as a library inside other packages, with no name clashes.
 ################################################################
 
-HMMER_DATE="Aug 2023"
+HMMER_DATE="Feb 2025"
 HMMER_COPYRIGHT="Copyright (C) 2023 Howard Hughes Medical Institute."
 HMMER_LICENSE="Freely distributed under the BSD open source license."
 HMMER_VERSION=$PACKAGE_VERSION
@@ -285,7 +285,7 @@ elif test "$enable_debugging" != "no"; then
       AC_MSG_ERROR([--enable-debugging only works for a gcc-like compiler])
    fi
 elif test x"${CFLAGS}" = x; then
-   CFLAGS="-O3"
+   CFLAGS="-Ofast -march=native -funroll-loops"
 fi
 
 # See if we should be passing -D_ENABLE_FORTIFY
@@ -692,10 +692,6 @@ AC_CONFIG_FILES([ \
   testsuite/Makefile                           \
   profmark/Makefile                            \
   src/impl_${impl_choice}/Makefile             \
-  documentation/Makefile                       \
-  documentation/man/Makefile                   \
-  documentation/userguide/Makefile             \
-  documentation/userguide/inclusions/Makefile  \
   libdivsufsort/Makefile                       \
   ])
 
@@ -704,43 +700,6 @@ AC_CONFIG_FILES([ \
   easel/Makefile                \
   easel/miniapps/Makefile       \
   easel/testsuite/Makefile      \
-  easel/documentation/Makefile  \
-  ])
-
-# Substitutions in Userguide .tex files
-# HMMER_VERSION, HMMER_DATE, HMMER_COPYRIGHT
-AC_CONFIG_FILES([ \
-  documentation/userguide/titlepage.tex  \
-  documentation/userguide/titlepage_daemon.tex  \
-  documentation/userguide/titlepage_server.tex  \
-  documentation/userguide/copyright.tex  \
-  ])
-
-# Substitutions in HMMER man pages:
-# HMMER_VERSION, HMMER_DATE, HMMER_COPYRIGHT, HMMER_LICENSE, HMMER_URL
-AC_CONFIG_FILES([ \
-  documentation/man/alimask.man     \
-  documentation/man/hmmalign.man    \
-  documentation/man/hmmbuild.man    \
-  documentation/man/hmmc2.man       \
-  documentation/man/hmmclient.man       \
-  documentation/man/hmmconvert.man  \
-  documentation/man/hmmemit.man     \
-  documentation/man/hmmer.man       \
-  documentation/man/hmmfetch.man    \
-  documentation/man/hmmlogo.man     \
-  documentation/man/hmmpgmd.man     \
-  documentation/man/hmmpgmd_shard.man     \
-  documentation/man/hmmpress.man    \
-  documentation/man/hmmscan.man     \
-  documentation/man/hmmsearch.man   \
-  documentation/man/hmmserver.man   \
-  documentation/man/hmmsim.man      \
-  documentation/man/hmmstat.man     \
-  documentation/man/jackhmmer.man   \
-  documentation/man/nhmmer.man      \
-  documentation/man/nhmmscan.man    \
-  documentation/man/phmmer.man      \
   ])
 
 # Substitutions in Easel man pages:

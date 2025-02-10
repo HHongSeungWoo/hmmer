@@ -48,3 +48,7 @@ src/makehmmerdb
 src/nhmmer
 src/nhmmscan
 src/phmmer
+.idea
+autom4te.cache
+documentation/userguide
+build

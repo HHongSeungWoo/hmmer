@@ -407,8 +407,7 @@
 
 #include <math.h>
 
-#include <xmmintrin.h>		/* SSE  */
-#include <emmintrin.h>		/* SSE2 */
+#include <immintrin.h>
 
 #include "easel.h"
 #include "esl_sse.h"
