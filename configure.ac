@@ -285,7 +285,7 @@ elif test "$enable_debugging" != "no"; then
       AC_MSG_ERROR([--enable-debugging only works for a gcc-like compiler])
    fi
 elif test x"${CFLAGS}" = x; then
-   CFLAGS="-Ofast -march=native -funroll-loops"
+   CFLAGS="-Ofast -msse4.2 -funroll-loops"
 fi
 
 # See if we should be passing -D_ENABLE_FORTIFY

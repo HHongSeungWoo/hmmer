@@ -815,7 +815,7 @@ thread_loop(ESL_THREADS *obj, ESL_WORK_QUEUE *queue, ESL_SQFILE *dbfp)
   void         *newBlock;
 
   int loop_count = 0;
-  int next_progress = 1000;
+  int next_progress = 10000;
 
   esl_workqueue_Reset(queue);
   esl_threads_WaitForStart(obj);
@@ -838,7 +838,8 @@ thread_loop(ESL_THREADS *obj, ESL_WORK_QUEUE *queue, ESL_SQFILE *dbfp)
 	    loop_count++;
 	    if (loop_count == next_progress) {
 	      fprintf(stdout, "@%d\n", loop_count);
-	      next_progress += 1000;
+	      fflush(stdout);
+	      next_progress += 10000;
 	    }
 	  }
   }
