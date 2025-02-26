@@ -23,6 +23,9 @@
 
 #include "hmmer.h"
 
+#include <sys/stat.h>
+#include <dirent.h>
+
 typedef struct {
   ESL_WORK_QUEUE   *queue;
 
@@ -37,9 +40,9 @@ typedef struct {
 #define INCOPTS     "--incE,--incT,--cut_ga,--cut_nc,--cut_tc"
 #define INCDOMOPTS  "--incdomE,--incdomT,--cut_ga,--cut_nc,--cut_tc"
 #define THRESHOPTS  "-E,-T,--domE,--domT,--incE,--incT,--incdomE,--incdomT,--cut_ga,--cut_nc,--cut_tc"
-#define CONOPTS     "--fast,--hand"                                         // jackhmmer doesn't use these - but leave them for consistency 
-#define EFFOPTS     "--eent,--eentexp,--eclust,--eset,--enone"              // Exclusive options for effective sequence number calculation 
-#define WGTOPTS     "--wgsc,--wblosum,--wpb,--wnone"                        // Exclusive options for relative weighting                    
+#define CONOPTS     "--fast,--hand"                                         // jackhmmer doesn't use these - but leave them for consistency
+#define EFFOPTS     "--eent,--eentexp,--eclust,--eset,--enone"              // Exclusive options for effective sequence number calculation
+#define WGTOPTS     "--wgsc,--wblosum,--wpb,--wnone"                        // Exclusive options for relative weighting
 
 #define CPUOPTS     NULL
 
@@ -52,7 +55,7 @@ static ESL_OPTIONS options[] = {
   { "-A",           eslARG_OUTFILE,      NULL, NULL, NULL,      NULL,    NULL,  NULL,            "save multiple alignment of hits to file <f>",                  2 },
   { "--stockholm",        eslARG_NONE,  FALSE, NULL, NULL,      NULL,    "-A",  "--a2m,--pfam",            "output alignment of hits in stockholm format",                       2 },
   { "--pfam",        eslARG_NONE,  FALSE, NULL, NULL,      NULL,    "-A",  "--a2m,--stockholm",            "output alignment of hits in pfam format.  Requires --notextw or --textw=0",                       2 },
-  { "--a2m",        eslARG_NONE,  FALSE, NULL, NULL,      NULL,    "-A",  "--stockholm,--pfam",            "output alignment of hits in a2m format",                       2 },  
+  { "--a2m",        eslARG_NONE,  FALSE, NULL, NULL,      NULL,    "-A",  "--stockholm,--pfam",            "output alignment of hits in a2m format",                       2 },
   { "--tblout",     eslARG_OUTFILE,      NULL, NULL, NULL,      NULL,    NULL,  NULL,            "save parseable table of per-sequence hits to file <f>",        2 },
   { "--domtblout",  eslARG_OUTFILE,      NULL, NULL, NULL,      NULL,    NULL,  NULL,            "save parseable table of per-domain hits to file <f>",          2 },
   { "--chkhmm",     eslARG_OUTFILE,      NULL, NULL, NULL,      NULL,    NULL,  NULL,            "save HMM checkpoints to files <f>-<iteration>.hmm",            2 },
@@ -112,13 +115,13 @@ static ESL_OPTIONS options[] = {
   { "--pnone",       eslARG_NONE,       FALSE, NULL, NULL,      NULL,    NULL,"--plaplace",      "don't use any prior; parameters are frequencies",             13 },
   { "--plaplace",    eslARG_NONE,       FALSE, NULL, NULL,      NULL,    NULL,   "--pnone",      "use a Laplace +1 prior",                                      13 },
 /* Control of E-value calibration */
-  { "--EmL",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "length of sequences for MSV Gumbel mu fit",                   11 },   
-  { "--EmN",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "number of sequences for MSV Gumbel mu fit",                   11 },   
-  { "--EvL",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "length of sequences for Viterbi Gumbel mu fit",               11 },   
-  { "--EvN",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "number of sequences for Viterbi Gumbel mu fit",               11 },   
-  { "--EfL",         eslARG_INT,        "100", NULL,"n>0",      NULL,    NULL,  NULL,            "length of sequences for Forward exp tail tau fit",            11 },   
-  { "--EfN",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "number of sequences for Forward exp tail tau fit",            11 },   
-  { "--Eft",         eslARG_REAL,      "0.04", NULL,"0<x<1",    NULL,    NULL,  NULL,            "tail mass for Forward exponential tail tau fit",              11 },   
+  { "--EmL",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "length of sequences for MSV Gumbel mu fit",                   11 },
+  { "--EmN",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "number of sequences for MSV Gumbel mu fit",                   11 },
+  { "--EvL",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "length of sequences for Viterbi Gumbel mu fit",               11 },
+  { "--EvN",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "number of sequences for Viterbi Gumbel mu fit",               11 },
+  { "--EfL",         eslARG_INT,        "100", NULL,"n>0",      NULL,    NULL,  NULL,            "length of sequences for Forward exp tail tau fit",            11 },
+  { "--EfN",         eslARG_INT,        "200", NULL,"n>0",      NULL,    NULL,  NULL,            "number of sequences for Forward exp tail tau fit",            11 },
+  { "--Eft",         eslARG_REAL,      "0.04", NULL,"0<x<1",    NULL,    NULL,  NULL,            "tail mass for Forward exponential tail tau fit",              11 },
 /* Other options */
   { "--nonull2",    eslARG_NONE,         NULL, NULL, NULL,      NULL,    NULL,  NULL,            "turn off biased composition score corrections",               12 },
   { "-Z",           eslARG_REAL,        FALSE, NULL, "x>0",     NULL,    NULL,  NULL,            "set # of comparisons done, for E-value calculation",          12 },
@@ -141,15 +144,14 @@ struct cfg_s {
 
 
 
-static int  serial_master(ESL_GETOPTS *go, struct cfg_s *cfg);
-static int  serial_loop(WORKER_INFO *info, ESL_SQFILE *dbfp);
-
 #define BLOCK_SIZE 1000
 
-static int  thread_loop(ESL_THREADS *obj, ESL_WORK_QUEUE *queue, ESL_SQFILE *dbfp);
+static int  serial_master(ESL_GETOPTS *go, struct cfg_s *cfg);
+
+static void *thread_loop(void *arg);
 static void pipeline_thread(void *arg);
 
-static void checkpoint_hmm(int nquery, P7_HMM *hmm,  char *basename, int iteration);
+static void checkpoint_hmm(int nquery, P7_HMM *hmm, char *basename, int iteration);
 static void checkpoint_msa(int nquery, ESL_MSA *msa, char *basename, int iteration);
 
 /* process_commandline()
@@ -182,7 +184,7 @@ process_commandline(int argc, char **argv, ESL_GETOPTS **ret_go, char **ret_qfil
   if (esl_opt_GetSetter(go, "--wgiven")  != eslARG_SETBY_DEFAULT)  { if (printf("Failed to parse command line: jackhmmer does not accept a --wgiven option\n")  < 0) ESL_XEXCEPTION_SYS(eslEWRITE, "write failed"); goto FAILURE; }
 
   /* help format: */
-  if (esl_opt_GetBoolean(go, "-h") == TRUE) 
+  if (esl_opt_GetBoolean(go, "-h") == TRUE)
     {
       p7_banner(stdout, argv[0], banner);
       esl_usage(stdout, argv[0], usage);
@@ -228,31 +230,42 @@ process_commandline(int argc, char **argv, ESL_GETOPTS **ret_go, char **ret_qfil
   if ((*ret_qfile  = esl_opt_GetArg(go, 1)) == NULL) { if (puts("Failed to get <seqfile> argument on command line") < 0) ESL_XEXCEPTION_SYS(eslEWRITE, "write failed"); goto FAILURE; }
   if ((*ret_dbfile = esl_opt_GetArg(go, 2)) == NULL) { if (puts("Failed to get <seqdb> argument on command line")   < 0) ESL_XEXCEPTION_SYS(eslEWRITE, "write failed");   goto FAILURE; }
 
-  /* Validate any attempted use of stdin streams */
+    /* Validate any attempted use of stdin streams */
   if (strcmp(*ret_dbfile, "-") == 0)
     { if (puts("jackhmmer cannot read <seqdb> from stdin stream") < 0) ESL_XEXCEPTION_SYS(eslEWRITE, "write failed"); goto FAILURE; }
 
   *ret_go = go;
   return eslOK;
-  
+
  FAILURE:  /* all errors handled here are user errors, so be polite.  */
   esl_usage(stdout, argv[0], usage);
   if (puts("\nwhere basic options are:") < 0) ESL_XEXCEPTION_SYS(eslEWRITE, "write failed");
   esl_opt_DisplayHelp(stdout, go, 1, 2, 120); /* 1= group; 2 = indentation; 120=textwidth*/
   if (printf("\nTo see more help on available options, do %s -h\n\n", argv[0]) < 0) ESL_XEXCEPTION_SYS(eslEWRITE, "write failed");
   esl_getopts_Destroy(go);
-  exit(1);  
+  exit(1);
 
  ERROR:
   if (go) esl_getopts_Destroy(go);
   exit(status);
 }
 
+typedef struct {
+    ESL_SQFILE **list;
+    int size;
+} SQFILE_LIST;
+
+typedef struct {
+    ESL_WORK_QUEUE *queue;
+    ESL_SQFILE *dbfp;
+    int status;
+} THREAD_ARGS;
+
 static int
 output_header(FILE *ofp, ESL_GETOPTS *go, char *qfile, char *dbfile)
 {
   p7_banner(ofp, go->argv[0], banner);
-  
+
   if (fprintf(ofp, "# query sequence file:             %s\n", qfile)                                                                                  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
   if (fprintf(ofp, "# target sequence database:        %s\n", dbfile)                                                                                 < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
   if (esl_opt_IsUsed(go, "-N")           && fprintf(ofp, "# maximum iterations set to:       %d\n",             esl_opt_GetInteger(go, "-N"))         < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
@@ -278,8 +291,8 @@ output_header(FILE *ofp, ESL_GETOPTS *go, char *qfile, char *dbfile)
   if (esl_opt_IsUsed(go, "--incT")       && fprintf(ofp, "# sequence inclusion threshold:    score >= %g\n",    esl_opt_GetReal   (go, "--incT"))     < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
   if (esl_opt_IsUsed(go, "--incdomE")    && fprintf(ofp, "# domain inclusion threshold:      E-value <= %g\n",  esl_opt_GetReal   (go, "--incdomE"))  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
   if (esl_opt_IsUsed(go, "--incdomT")    && fprintf(ofp, "# domain inclusion threshold:      score >= %g\n",    esl_opt_GetReal   (go, "--incdomT"))  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-//if (esl_opt_IsUsed(go, "--cut_ga")     && fprintf(ofp, "# model-specific thresholding:     GA cutoffs\n")                                           < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed"); 
-//if (esl_opt_IsUsed(go, "--cut_nc")     && fprintf(ofp, "# model-specific thresholding:     NC cutoffs\n")                                           < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed"); 
+//if (esl_opt_IsUsed(go, "--cut_ga")     && fprintf(ofp, "# model-specific thresholding:     GA cutoffs\n")                                           < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+//if (esl_opt_IsUsed(go, "--cut_nc")     && fprintf(ofp, "# model-specific thresholding:     NC cutoffs\n")                                           < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
 //if (esl_opt_IsUsed(go, "--cut_tc")     && fprintf(ofp, "# model-specific thresholding:     TC cutoffs\n")                                           < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
   if (esl_opt_IsUsed(go, "--max")        && fprintf(ofp, "# Max sensitivity mode:            on [all heuristic filters off]\n")                       < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
   if (esl_opt_IsUsed(go, "--F1")         && fprintf(ofp, "# MSV filter P threshold:       <= %g\n",             esl_opt_GetReal(go, "--F1"))          < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
@@ -327,410 +340,505 @@ output_header(FILE *ofp, ESL_GETOPTS *go, char *qfile, char *dbfile)
 }
 
 int
-main(int argc, char **argv)
-{
-  ESL_GETOPTS     *go      = NULL;	/* command line processing                 */
-  struct cfg_s     cfg;                 /* configuration data                      */
-  int              status  = eslOK;
+main(int argc, char **argv) {
+    ESL_GETOPTS *go = NULL; /* command line processing                 */
+    struct cfg_s cfg; /* configuration data                      */
+    int status = eslOK;
 
-  /* Set processor specific flags */
-  impl_Init();
+    /* Set processor specific flags */
+    impl_Init();
 
-  /* Initialize what we can in the config structure (without knowing the alphabet yet) 
-   */
-  cfg.qfile      = NULL;
-  cfg.dbfile     = NULL;
+    /* Initialize what we can in the config structure (without knowing the alphabet yet)
+     */
+    cfg.qfile  = NULL;
+    cfg.dbfile = NULL;
 
-  /* Initializations */
-  p7_FLogsumInit();		/* we're going to use table-driven Logsum() approximations at times */
-  process_commandline(argc, argv, &go, &cfg.qfile, &cfg.dbfile);    
+    /* Initializations */
+    p7_FLogsumInit(); /* we're going to use table-driven Logsum() approximations at times */
+    process_commandline(argc, argv, &go, &cfg.qfile, &cfg.dbfile);
 
-  /* Figure out who we are, and send control there: 
-   * we might be a serial program.
-   */
-  status = serial_master(go, &cfg);
+    /* Figure out who we are, and send control there:
+     * we might be a serial program.
+     */
+    status = serial_master(go, &cfg);
 
-  esl_getopts_Destroy(go);
+    esl_getopts_Destroy(go);
 
-  return status;
+    return status;
 }
+
 
 /* serial_master()
  * The serial version of hmmsearch.
  * For each query HMM in <hmmfile> search the database for hits.
- * 
+ *
  * A master can only return if it's successful. All errors are handled immediately and fatally with p7_Fail().
  */
 static int
-serial_master(ESL_GETOPTS *go, struct cfg_s *cfg)
-{
-  FILE            *ofp      = stdout;             /* output file for results (default stdout)        */
-  FILE            *afp      = NULL;               /* alignment output file (-A option)               */
-  FILE            *tblfp    = NULL;		  /* output stream for tabular per-seq (--tblout)    */
-  FILE            *domtblfp = NULL;		  /* output stream for tabular per-seq (--domtblout) */
-  int              qformat  = eslSQFILE_UNKNOWN;  /* format of qfile                                 */
-  int              dbformat = eslSQFILE_UNKNOWN;  /* format of dbfile                                */
-  ESL_SQFILE      *qfp      = NULL;		  /* open qfile                                      */
-  ESL_SQFILE      *dbfp     = NULL;               /* open dbfile                                     */
-  ESL_ALPHABET    *abc      = NULL;               /* sequence alphabet                               */
-  P7_BG           *bg       = NULL;		  /* null model                                      */
-  P7_BUILDER      *bld      = NULL;               /* HMM construction configuration                  */
-  ESL_SQ          *qsq      = NULL;               /* query sequence                                  */
-  ESL_KEYHASH     *kh       = NULL;		  /* hash of previous top hits' ranks                */
-  ESL_STOPWATCH   *w        = NULL;               /* for timing                                      */
-  int              nquery   = 0;
-  int              textw;
-  int              iteration;
-  int              maxiterations;
-  int              nnew_targets;
-  int              prv_msa_nseq;
-  int              status   = eslOK;
-  int              qstatus  = eslOK;
-  int              sstatus  = eslOK;
+serial_master(ESL_GETOPTS *go, struct cfg_s *cfg) {
+    FILE *ofp         = stdout; /* output file for results (default stdout)        */
+    FILE *afp         = NULL; /* alignment output file (-A option)               */
+    FILE *tblfp       = NULL; /* output stream for tabular per-seq (--tblout)    */
+    FILE *domtblfp    = NULL; /* output stream for tabular per-seq (--domtblout) */
+    int qformat       = eslSQFILE_UNKNOWN; /* format of qfile                                 */
+    int dbformat      = eslSQFILE_UNKNOWN; /* format of dbfile                                */
+    ESL_SQFILE *qfp   = NULL; /* open qfile                                      */
+    SQFILE_LIST dbfps = {.list = NULL, .size = 0}; /* open dbfiles                                     */
+    ESL_ALPHABET *abc = NULL; /* sequence alphabet                               */
+    P7_BG *bg         = NULL; /* null model                                      */
+    P7_BUILDER *bld   = NULL; /* HMM construction configuration                  */
+    ESL_SQ *qsq       = NULL; /* query sequence                                  */
+    ESL_KEYHASH *kh   = NULL; /* hash of previous top hits' ranks                */
+    ESL_STOPWATCH *w  = NULL; /* for timing                                      */
+    int nquery        = 0;
+    int textw;
+    int iteration;
+    int maxiterations;
+    int nnew_targets;
+    int prv_msa_nseq;
+    int status  = eslOK;
+    int qstatus = eslOK;
+    int sstatus = eslOK;
 
-  int              i;
-  int              ncpus    = 0;
+    int i;
+    int ncpus = 0;
 
-  int              infocnt  = 0;
-  WORKER_INFO     *info     = NULL;
+    int infocnt       = 0;
+    WORKER_INFO *info = NULL;
 
-  ESL_SQ_BLOCK    *block    = NULL;
-  ESL_THREADS     *threadObj= NULL;
-  ESL_WORK_QUEUE  *queue    = NULL;
+    ESL_SQ_BLOCK *block    = NULL;
+    ESL_THREADS *threadObj = NULL;
+    ESL_WORK_QUEUE *queue  = NULL;
 
-  /* Initializations */
-  abc           = esl_alphabet_Create(eslAMINO);
-  w             = esl_stopwatch_Create();
-  kh            = esl_keyhash_Create();
-  maxiterations = esl_opt_GetInteger(go, "-N");
-  textw         = (esl_opt_GetBoolean(go, "--notextw") ? 0 : esl_opt_GetInteger(go, "--textw"));
+    /* Initializations */
+    abc           = esl_alphabet_Create(eslAMINO);
+    w             = esl_stopwatch_Create();
+    kh            = esl_keyhash_Create();
+    maxiterations = esl_opt_GetInteger(go, "-N");
+    textw         = (esl_opt_GetBoolean(go, "--notextw") ? 0 : esl_opt_GetInteger(go, "--textw"));
 
-  esl_stopwatch_Start(w);
+    esl_stopwatch_Start(w);
 
-  /* If caller declared input formats, decode them */
-  if (esl_opt_IsOn(go, "--qformat")) {
-    qformat = esl_sqio_EncodeFormat(esl_opt_GetString(go, "--qformat"));
-    if (qformat == eslSQFILE_UNKNOWN) p7_Fail("%s is not a recognized input sequence file format\n", esl_opt_GetString(go, "--qformat"));
-  }
-  if (esl_opt_IsOn(go, "--tformat")) {
-    dbformat = esl_sqio_EncodeFormat(esl_opt_GetString(go, "--tformat"));
-    if (dbformat == eslSQFILE_UNKNOWN) p7_Fail("%s is not a recognized sequence database file format\n", esl_opt_GetString(go, "--tformat"));
-  }
-
-  /* Initialize a null model.
-   * The single-sequence P7_BUILDER needs to see this, to construct its probabilities.
-   */
-  bg = p7_bg_Create(abc);
-
-  /* Initialize builder configuration 
-   * Default matrix is stored in the --mx option, so it's always IsOn(). 
-   * Check --mxfile first; then go to the --mx option and the default. 
-   */
-  bld = p7_builder_Create(go, abc);
-  if (esl_opt_IsOn(go, "--mxfile")) status = p7_builder_SetScoreSystem (bld, esl_opt_GetString(go, "--mxfile"), NULL, esl_opt_GetReal(go, "--popen"), esl_opt_GetReal(go, "--pextend"), bg);
-  else                              status = p7_builder_LoadScoreSystem(bld, esl_opt_GetString(go, "--mx"),           esl_opt_GetReal(go, "--popen"), esl_opt_GetReal(go, "--pextend"), bg); 
-  if (status != eslOK) p7_Fail("Failed to set single query seq score system:\n%s\n", bld->errbuf);
-
-  /* Open results output files */
-  if (esl_opt_IsOn(go, "-o")          && (ofp      = fopen(esl_opt_GetString(go, "-o"),          "w")) == NULL)  
-    p7_Fail("Failed to open output file %s for writing\n",                 esl_opt_GetString(go, "-o"));
-  if (esl_opt_IsOn(go, "-A")          &&  (afp      = fopen(esl_opt_GetString(go, "-A"),          "w")) == NULL)  
-    p7_Fail("Failed to open alignment output file %s for writing\n",       esl_opt_GetString(go, "-A"));
-  if (esl_opt_IsOn(go, "--tblout")    && (tblfp    = fopen(esl_opt_GetString(go, "--tblout"),    "w")) == NULL)  
-    p7_Fail("Failed to open tabular per-seq output file %s for writing\n", esl_opt_GetString(go, "--tblout"));
-  if (esl_opt_IsOn(go, "--domtblout") && (domtblfp = fopen(esl_opt_GetString(go, "--domtblout"), "w")) == NULL)  
-    p7_Fail("Failed to open tabular per-dom output file %s for writing\n", esl_opt_GetString(go, "--domtblout"));
-
-  /* Open the target sequence database for sequential access. */
-  status =  esl_sqfile_OpenDigital(abc, cfg->dbfile, dbformat, p7_SEQDBENV, &dbfp);
-  if      (status == eslENOTFOUND) p7_Fail("Failed to open target sequence database %s for reading\n",      cfg->dbfile);
-  else if (status == eslEFORMAT)   p7_Fail("Target sequence database file %s is empty or misformatted\n",   cfg->dbfile);
-  else if (status == eslEINVAL)    p7_Fail("Can't autodetect format of a stdin or .gz seqfile");
-  else if (status != eslOK)        p7_Fail("Unexpected error %d opening target sequence database file %s\n", status, cfg->dbfile);
-  
-  if (! esl_sqfile_IsRewindable(dbfp)) 
-    p7_Fail("Target sequence file %s isn't rewindable; jackhmmer requires that it is", cfg->dbfile);
-
-  /* Open the query sequence file  */
-  status = esl_sqfile_OpenDigital(abc, cfg->qfile, qformat, NULL, &qfp);
-  if      (status == eslENOTFOUND) p7_Fail("Failed to open sequence file %s for reading\n",      cfg->qfile);
-  else if (status == eslEFORMAT)   p7_Fail("Sequence file %s is empty or misformatted\n",        cfg->qfile);
-  else if (status == eslEINVAL)    p7_Fail("Can't autodetect format of a stdin or .gz seqfile");
-  else if (status != eslOK)        p7_Fail ("Unexpected error %d opening sequence file %s\n", status, cfg->qfile);
-  qsq = esl_sq_CreateDigital(abc);
-
-  /* initialize thread data */
-  ncpus = ESL_MIN(esl_opt_GetInteger(go, "--cpu"), esl_threads_GetCPUCount());
-  if (ncpus > 0)
-    {
-      threadObj = esl_threads_Create(&pipeline_thread);
-      queue = esl_workqueue_Create(ncpus * 2);
+    /* If caller declared input formats, decode them */
+    if (esl_opt_IsOn(go, "--qformat")) {
+        qformat = esl_sqio_EncodeFormat(esl_opt_GetString(go, "--qformat"));
+        if (qformat == eslSQFILE_UNKNOWN) p7_Fail("%s is not a recognized input sequence file format\n",
+                                                  esl_opt_GetString(go, "--qformat"));
+    }
+    if (esl_opt_IsOn(go, "--tformat")) {
+        dbformat = esl_sqio_EncodeFormat(esl_opt_GetString(go, "--tformat"));
+        if (dbformat == eslSQFILE_UNKNOWN) p7_Fail("%s is not a recognized sequence database file format\n",
+                                                   esl_opt_GetString(go, "--tformat"));
     }
 
-  infocnt = (ncpus == 0) ? 1 : ncpus;
-  ESL_ALLOC(info, (ptrdiff_t) sizeof(*info) * infocnt);
+    /* Initialize a null model.
+     * The single-sequence P7_BUILDER needs to see this, to construct its probabilities.
+     */
+    bg = p7_bg_Create(abc);
 
-  /* Ready to begin */
-  output_header(ofp, go, cfg->qfile, cfg->dbfile);
-  
-  for (i = 0; i < infocnt; ++i)
-    {
-      info[i].pli   = NULL;
-      info[i].th    = NULL;
-      info[i].om    = NULL;
-      info[i].bg    = p7_bg_Clone(bg);
+    /* Initialize builder configuration
+     * Default matrix is stored in the --mx option, so it's always IsOn().
+     * Check --mxfile first; then go to the --mx option and the default.
+     */
+    bld = p7_builder_Create(go, abc);
+    if (esl_opt_IsOn(go, "--mxfile")) status = p7_builder_SetScoreSystem(
+                                          bld, esl_opt_GetString(go, "--mxfile"), NULL, esl_opt_GetReal(go, "--popen"),
+                                          esl_opt_GetReal(go, "--pextend"), bg);
+    else status = p7_builder_LoadScoreSystem(bld, esl_opt_GetString(go, "--mx"), esl_opt_GetReal(go, "--popen"),
+                                             esl_opt_GetReal(go, "--pextend"), bg);
+    if (status != eslOK) p7_Fail("Failed to set single query seq score system:\n%s\n", bld->errbuf);
 
-      info[i].queue = queue;
-    }
+    /* Open results output files */
+    if (esl_opt_IsOn(go, "-o") && (ofp = fopen(esl_opt_GetString(go, "-o"), "w")) == NULL) p7_Fail(
+        "Failed to open output file %s for writing\n", esl_opt_GetString(go, "-o"));
+    if (esl_opt_IsOn(go, "-A") && (afp = fopen(esl_opt_GetString(go, "-A"), "w")) == NULL) p7_Fail(
+        "Failed to open alignment output file %s for writing\n", esl_opt_GetString(go, "-A"));
+    if (esl_opt_IsOn(go, "--tblout") && (tblfp = fopen(esl_opt_GetString(go, "--tblout"), "w")) == NULL) p7_Fail(
+        "Failed to open tabular per-seq output file %s for writing\n", esl_opt_GetString(go, "--tblout"));
+    if (esl_opt_IsOn(go, "--domtblout") && (domtblfp = fopen(esl_opt_GetString(go, "--domtblout"), "w")) ==
+        NULL) p7_Fail("Failed to open tabular per-dom output file %s for writing\n",
+                      esl_opt_GetString(go, "--domtblout"));
 
-  for (i = 0; i < ncpus * 2; ++i)
-    {
-      block = esl_sq_CreateDigitalBlock(BLOCK_SIZE, abc);
-      if (block == NULL) {
-      	p7_Fail("Failed to allocate sequence block");
-      }
+    /* Open the target sequence database for sequential access. */
+    /* 폴더도 읽을 수 있도록 수정
+     * 파일개수 256, 파일이름 최대길이 2048, free 별도로 해제하지 않고 프로그램 종료에 맞김. 필요한 경우 할당 해제 필요.
+     */
+    struct stat path_stat;
+    char *file_paths[256] = {0};
 
-      status = esl_workqueue_Init(queue, block);
-      if (status != eslOK) {
-      	p7_Fail("Failed to add block to work queue");
-      }
-    }
+    if (stat(cfg->dbfile, &path_stat) != 0) p7_Fail("데이터베이스 정보 불러오기 실패\n");
 
-  /* Outer loop over sequence queries, if more than one */
-  while ((qstatus = esl_sqio_Read(qfp, qsq)) == eslOK)
-    {
-      P7_HMM          *hmm     = NULL;	     /* HMM - only needed if checkpointed        */
-      P7_HMM         **ret_hmm = NULL;	     /* HMM - only needed if checkpointed        */
-      P7_OPROFILE     *om      = NULL;       /* optimized query profile                  */
-      P7_TRACE        *qtr     = NULL;       /* faux trace for query sequence            */
-      ESL_MSA         *msa     = NULL;       /* multiple alignment of included hits      */
-      
-      if (esl_opt_IsOn(go, "--chkhmm")) ret_hmm = &hmm;
+    if (S_ISDIR(path_stat.st_mode)) {
+        DIR *dir;
+        struct dirent *entry;
+        int c = 0;
 
-      nquery++;
-      if (qsq->n == 0) continue; /* skip zero length queries as if they aren't even present. */
+        if ((dir = opendir(cfg->dbfile)) == NULL) p7_Fail("폴더를 열 수 없습니다: %s\n", cfg->dbfile);
 
-      if (fprintf(ofp, "Query:       %s  [L=%ld]\n", qsq->name, (long) qsq->n) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-      if (qsq->acc[0]  != '\0' && fprintf(ofp, "Accession:   %s\n", qsq->acc)  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed"); 
-      if (qsq->desc[0] != '\0' && fprintf(ofp, "Description: %s\n", qsq->desc) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");  
-      if (fprintf(ofp, "\n")                                                   < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+        while ((entry = readdir(dir)) != NULL) {
+            char fullname[2048];
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
 
-      for (iteration = 1; iteration <= maxiterations; iteration++)
-	{       /* We enter each iteration with an optimized profile. */
-	  esl_stopwatch_Start(w);
+            snprintf(fullname, sizeof(fullname), "%s/%s", cfg->dbfile, entry->d_name);
 
-	  if (om        != NULL) p7_oprofile_Destroy(om);
-	  if (info->pli != NULL) p7_pipeline_Destroy(info->pli);
-	  if (info->th  != NULL) p7_tophits_Destroy(info->th);
-	  if (info->om  != NULL) p7_oprofile_Destroy(info->om);
-
- 	  /* Create the search model: from query alone (round 1) or from MSA (round 2+) */
-	  if (msa == NULL)	/* round 1 */
-	    {
-	      p7_SingleBuilder(bld, qsq, info[0].bg, ret_hmm, &qtr, NULL, &om); /* bypass HMM - only need model */
-	      prv_msa_nseq = 1;
-	    }
-	  else
-	    {
-	      /* Throw away old model. Build new one. */
-	      status = p7_Builder(bld, msa, info[0].bg, ret_hmm, NULL, NULL, &om, NULL);
-	      if      (status == eslENORESULT) p7_Fail("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
-	      else if (status == eslEFORMAT)   p7_Fail("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
-	      else if (status != eslOK)        p7_Fail("Unexpected error constructing new model at iteration %d:",     iteration);
-
-	      if (fprintf(ofp, "@@\n")                                               < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");  
-	      if (fprintf(ofp, "@@ Round:                  %d\n", iteration)         < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-              if (fprintf(ofp, "@@ Included in MSA:        %d subsequences (query + %d subseqs from %d targets)\n",
-                          msa->nseq, msa->nseq-1, kh->nkeys)                         < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	      if (fprintf(ofp, "@@ Model size:             %d positions\n", om->M)   < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	      if (fprintf(ofp, "@@\n\n")                                             < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-
-	      prv_msa_nseq = msa->nseq;
-	      esl_msa_Destroy(msa);
-	    }
-    //fprintf(stderr, "Round %d:", iteration);
-	  /* HMM checkpoint output */
-	  if (esl_opt_IsOn(go, "--chkhmm")) {
-	    checkpoint_hmm(nquery, hmm, esl_opt_GetString(go, "--chkhmm"), iteration);
-	    p7_hmm_Destroy(hmm);
-	    hmm = NULL;
-	  }
-
-	  /* Create new processing pipeline and top hits list; destroy old. (TODO: reuse rather than recreate) */
-	  for (i = 0; i < infocnt; ++i)
-	    {
-	      info[i].th  = p7_tophits_Create();
-	      info[i].om  = p7_oprofile_Clone(om);
-	      info[i].pli = p7_pipeline_Create(go, om->M, 400, FALSE, p7_SEARCH_SEQS); /* 400 is a dummy length for now */
-	      p7_pli_NewModel(info[i].pli, info[i].om, info[i].bg);
-
-	      if (ncpus > 0) esl_threads_AddThread(threadObj, &info[i]);
-	    }
-
-	  if (ncpus > 0) sstatus = thread_loop(threadObj, queue, dbfp);
-	  else           sstatus = serial_loop(info, dbfp);
-
-	  switch(sstatus)
-	    {
-	    case eslEFORMAT:
-	      p7_Fail("Parse failed (sequence file %s):\n%s\n",
-			dbfp->filename, esl_sqfile_GetErrorBuf(dbfp));
-	      break;
-	    case eslEOF:
-	      /* do nothing */
-	      break;
-	    default:
-	      p7_Fail("Unexpected error %d reading sequence file %s",
-			sstatus, dbfp->filename);
-	    }
-
-	  /* merge the results of the search results */
-	  for (i = 1; i < infocnt; ++i)
-	    {
-	      p7_tophits_Merge(info[0].th, info[i].th);
-	      p7_pipeline_Merge(info[0].pli, info[i].pli);
-
-	      p7_pipeline_Destroy(info[i].pli);
-	      p7_tophits_Destroy(info[i].th);
-	      p7_oprofile_Destroy(info[i].om);
-	    }
-
-	  /* Print the results. */
-	  p7_tophits_SortBySortkey(info->th);
-          p7_tophits_Threshold(info->th, info->pli);
-          if (esl_opt_IsOn(go, "--output_limit")) {
-            const int output_limit = esl_opt_GetInteger(go, "--output_limit");
-            if (output_limit > -1) {
-              info->th->N = ESL_MIN(info->th->N, output_limit);
+            if (stat(fullname, &path_stat) != 0) continue;
+            if (S_ISREG(path_stat.st_mode)) {
+                file_paths[c++] = strdup(fullname);
             }
-          }
-	  p7_tophits_CompareRanking(info->th, kh, &nnew_targets);
-	  // p7_tophits_Targets(ofp, info->th, info->pli, textw); if (fprintf(ofp, "\n\n") < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	  // p7_tophits_Domains(ofp, info->th, info->pli, textw); if (fprintf(ofp, "\n\n") < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-
-	  /* Create alignment of the top hits */
-	  /* <&qsq, &qtr, 1> included in p7_tophits_Alignment args here => initial query is added to the msa at each round. */
-	  p7_tophits_Alignment(info->th, abc, &qsq, &qtr, 1, p7_ALL_CONSENSUS_COLS, &msa);
-	  esl_msa_Digitize(abc,msa,NULL);
-	  esl_msa_FormatName(msa, "%s-i%d", qsq->name, iteration);  
-	  if (qsq->acc[0]  != '\0') esl_msa_SetAccession(msa, qsq->acc,  -1);
-	  if (qsq->desc[0] != '\0') esl_msa_SetDesc     (msa, qsq->desc, -1);
-	  esl_msa_FormatAuthor(msa, "jackhmmer (HMMER %s)", HMMER_VERSION);
-
-	  /* Optional checkpointing */
-	  if (esl_opt_IsOn(go, "--chkali")) checkpoint_msa(nquery, msa, esl_opt_GetString(go, "--chkali"), iteration);
-
-	  esl_stopwatch_Stop(w);
-	  p7_pli_Statistics(ofp, info->pli, w);
-
-
-	  // /* Convergence test */
-	  // if (fprintf(ofp, "\n")                                             < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	  // if (fprintf(ofp, "@@ New targets included:   %d\n", nnew_targets)  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	  // if (fprintf(ofp, "@@ New alignment includes: %d subseqs (was %d), including original query\n",
-		 //  msa->nseq, prv_msa_nseq)                                   < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	  // if (nnew_targets == 0 && msa->nseq <= prv_msa_nseq)
-	  //   {
-	  //     if (fprintf(ofp, "@@\n")                                       < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	  //     if (fprintf(ofp, "@@ CONVERGED (in %d rounds). \n", iteration) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	  //     if (fprintf(ofp, "@@\n\n")                                     < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	  //     break;
-	  //   }
-	  // else if (iteration < maxiterations)
-	  //   { if (fprintf(ofp, "@@ Continuing to next round.\n\n")           < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed"); }
-
-	  esl_sqfile_Position(dbfp, 0);
-	} /* end iteration loop */
-
-      /* Because we destroy/create the hitlist, om, pipeline, and msa above, rather than create/destroy,
-       * the results of the last iteration have carried through to us now, and we can output
-       * whatever final results we care to.
-       */
-      if (tblfp)    p7_tophits_TabularTargets(tblfp,    qsq->name, qsq->acc, info->th, info->pli, (nquery == 1));
-      if (domtblfp) p7_tophits_TabularDomains(domtblfp, qsq->name, qsq->acc, info->th, info->pli, (nquery == 1));
-      if (afp) 
-	{
-	  if(esl_opt_IsOn(go, "--stockholm")){
-	    esl_msafile_Write(afp, msa, eslMSAFILE_STOCKHOLM);
-	  }
-	  else if(esl_opt_IsOn(go, "--pfam")){
-	      if(textw !=0){
-		ESL_EXCEPTION_SYS(eslEWRITE, "Pfam alignment format requires unlimited output width");
-	      }
-	      esl_msafile_Write(afp, msa, eslMSAFILE_PFAM);
-	  }
-	  else if(esl_opt_IsOn(go, "--a2m")){
-	    esl_msafile_Write(afp, msa, eslMSAFILE_A2M);
-	  }
-	  else{ // default to selecting pfam vs. stockholm dased on output width
-	         if (textw > 0) esl_msafile_Write(afp, msa, eslMSAFILE_STOCKHOLM);
-		 else           esl_msafile_Write(afp, msa, eslMSAFILE_PFAM);
-	   }
-
-	  if (fprintf(ofp, "# Alignment of %d hits satisfying inclusion thresholds saved to: %s\n", msa->nseq, esl_opt_GetString(go, "-A")) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-	}
-      if (fprintf(ofp, "//\n")  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-
-      p7_pipeline_Destroy(info->pli);
-      p7_tophits_Destroy(info->th);
-      p7_oprofile_Destroy(info->om);
-
-      info->pli = NULL;
-      info->th  = NULL;
-      info->om  = NULL;
-
-      esl_msa_Destroy(msa);
-      p7_oprofile_Destroy(om);
-      p7_trace_Destroy(qtr);
-      esl_sq_Reuse(qsq);
-      esl_keyhash_Reuse(kh);
-      esl_sqfile_Position(dbfp, 0);
-    }
-  if      (qstatus == eslEFORMAT) p7_Fail("Parse failed (sequence file %s):\n%s\n",
-					    qfp->filename, esl_sqfile_GetErrorBuf(qfp));
-  else if (qstatus != eslEOF)     p7_Fail("Unexpected error %d reading sequence file %s",
-					    qstatus, qfp->filename);
-
-  /* Terminate outputs - any last words?
-   */
-  if (tblfp)    p7_tophits_TabularTail(tblfp,    "jackhmmer", p7_SEARCH_SEQS, cfg->qfile, cfg->dbfile, go);
-  if (domtblfp) p7_tophits_TabularTail(domtblfp, "jackhmmer", p7_SEARCH_SEQS, cfg->qfile, cfg->dbfile, go);
-  if (ofp &&    fprintf(ofp, "[ok]\n")  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
-
-  /* Cleanup - prepare for successful exit
-   */
-  for (i = 0; i < infocnt; ++i)
-    p7_bg_Destroy(info[i].bg);
-
-  if (ncpus > 0)
-    {
-      esl_workqueue_Reset(queue);
-      while (esl_workqueue_Remove(queue, (void **) &block) == eslOK)
-	esl_sq_DestroyBlock(block);
-      esl_workqueue_Destroy(queue);
-      esl_threads_Destroy(threadObj);
+        }
+        closedir(dir);
+    } else {
+        file_paths[0] = cfg->dbfile;
     }
 
-  free(info);
+    for (i = 0; i < 256; i++) {
+        if (file_paths[i] == NULL) continue;
 
-  esl_keyhash_Destroy(kh);
-  esl_sqfile_Close(qfp);
-  esl_sqfile_Close(dbfp);
-  esl_sq_Destroy(qsq);  
-  esl_stopwatch_Destroy(w);
-  p7_builder_Destroy(bld);
-  esl_alphabet_Destroy(abc);
-  p7_bg_Destroy(bg);
+        if (dbfps.list == NULL) {
+            dbfps.list = (ESL_SQFILE **)malloc(sizeof(ESL_SQFILE *));
+            if (dbfps.list == NULL) p7_Fail("메모리 할당 실패");
+        } else {
+            ESL_SQFILE **new_list = realloc(dbfps.list, sizeof(ESL_SQFILE *) * (dbfps.size + 1));
+            if (new_list == NULL) p7_Fail("메모리 재할당 실패");
 
-  if (ofp      != stdout) fclose(ofp);
-  if (afp      != NULL)   fclose(afp);
-  if (tblfp    != NULL)   fclose(tblfp);
-  if (domtblfp != NULL)   fclose(domtblfp);
+            dbfps.list = new_list;
+        }
+        dbfps.size++;
 
-  return eslOK;
+        status = esl_sqfile_OpenDigital(abc, file_paths[i], dbformat,p7_SEQDBENV, &dbfps.list[i]);
+        if (status == eslENOTFOUND) p7_Fail("Failed to open target sequence database %s for reading\n", file_paths[i]);
+        else if (status == eslEFORMAT)
+            p7_Fail("Target sequence database file %s is empty or misformatted\n",
+                    file_paths[i]);
+        else if (status == eslEINVAL) p7_Fail("Can't autodetect format of a stdin or .gz seqfile");
+        else if (status != eslOK)
+            p7_Fail("Unexpected error %d opening target sequence database file %s\n", status,
+                    file_paths[i]);
+        if (!esl_sqfile_IsRewindable(dbfps.list[i]))
+            p7_Fail(
+                "Target sequence file %s isn't rewindable; jackhmmer requires that it is", file_paths[i]);
+    }
 
- ERROR:
-  return eslFAIL;
+    /* Open the query sequence file  */
+    status = esl_sqfile_OpenDigital(abc, cfg->qfile, qformat, NULL, &qfp);
+    if (status == eslENOTFOUND) p7_Fail("Failed to open sequence file %s for reading\n", cfg->qfile);
+    else if (status == eslEFORMAT) p7_Fail("Sequence file %s is empty or misformatted\n", cfg->qfile);
+    else if (status == eslEINVAL) p7_Fail("Can't autodetect format of a stdin or .gz seqfile");
+    else if (status != eslOK) p7_Fail("Unexpected error %d opening sequence file %s\n", status, cfg->qfile);
+    qsq = esl_sq_CreateDigital(abc);
+
+    /* initialize thread data */
+    ncpus = ESL_MIN(esl_opt_GetInteger(go, "--cpu"), esl_threads_GetCPUCount());
+    if (ncpus > 0) {
+        threadObj = esl_threads_Create(&pipeline_thread);
+        queue     = esl_workqueue_Create(ncpus * 2);
+    }
+
+    infocnt = (ncpus == 0) ? 1 : ncpus;
+    ESL_ALLOC(info, (ptrdiff_t) sizeof(*info) * infocnt);
+
+    /* Ready to begin */
+    output_header(ofp, go, cfg->qfile, cfg->dbfile);
+
+    for (i = 0; i < infocnt; ++i) {
+        info[i].pli = NULL;
+        info[i].th  = NULL;
+        info[i].om  = NULL;
+        info[i].bg  = p7_bg_Clone(bg);
+
+        info[i].queue = queue;
+    }
+
+    for (i = 0; i < ncpus * 2; ++i) {
+        block = esl_sq_CreateDigitalBlock(BLOCK_SIZE, abc);
+        if (block == NULL) {
+            p7_Fail("Failed to allocate sequence block");
+        }
+
+        status = esl_workqueue_Init(queue, block);
+        if (status != eslOK) {
+            p7_Fail("Failed to add block to work queue");
+        }
+    }
+
+    /* Outer loop over sequence queries, if more than one */
+    while ((qstatus = esl_sqio_Read(qfp, qsq)) == eslOK) {
+        P7_HMM *hmm      = NULL; /* HMM - only needed if checkpointed        */
+        P7_HMM **ret_hmm = NULL; /* HMM - only needed if checkpointed        */
+        P7_OPROFILE *om  = NULL; /* optimized query profile                  */
+        P7_TRACE *qtr    = NULL; /* faux trace for query sequence            */
+        ESL_MSA *msa     = NULL; /* multiple alignment of included hits      */
+
+        if (esl_opt_IsOn(go, "--chkhmm")) ret_hmm = &hmm;
+
+        nquery++;
+        if (qsq->n == 0) continue; /* skip zero length queries as if they aren't even present. */
+
+        if (fprintf(ofp, "Query:       %s  [L=%ld]\n", qsq->name, (long)qsq->n) < 0)
+            ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+        if (qsq->acc[0] != '\0' && fprintf(ofp, "Accession:   %s\n", qsq->acc) < 0)
+            ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+        if (qsq->desc[0] != '\0' && fprintf(ofp, "Description: %s\n", qsq->desc) < 0)
+            ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+        if (fprintf(ofp, "\n") < 0)
+            ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+
+        for (iteration = 1; iteration <= maxiterations; iteration++) {
+            /* We enter each iteration with an optimized profile. */
+            esl_stopwatch_Start(w);
+
+            if (om != NULL) p7_oprofile_Destroy(om);
+            if (info->pli != NULL) p7_pipeline_Destroy(info->pli);
+            if (info->th != NULL) p7_tophits_Destroy(info->th);
+            if (info->om != NULL) p7_oprofile_Destroy(info->om);
+
+            /* Create the search model: from query alone (round 1) or from MSA (round 2+) */
+            if (msa == NULL) /* round 1 */
+            {
+                p7_SingleBuilder(bld, qsq, info[0].bg, ret_hmm, &qtr, NULL, &om); /* bypass HMM - only need model */
+                prv_msa_nseq = 1;
+            } else {
+                /* Throw away old model. Build new one. */
+                status = p7_Builder(bld, msa, info[0].bg, ret_hmm, NULL, NULL, &om, NULL);
+                if (status == eslENORESULT) p7_Fail("Failed to construct new model from iteration %d results:\n%s",
+                                                    iteration, bld->errbuf);
+                else if (status == eslEFORMAT) p7_Fail("Failed to construct new model from iteration %d results:\n%s",
+                                                       iteration, bld->errbuf);
+                else if (status != eslOK) p7_Fail("Unexpected error constructing new model at iteration %d:",
+                                                  iteration);
+
+                if (fprintf(ofp, "@@\n") < 0)
+                    ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+                if (fprintf(ofp, "@@ Round:                  %d\n", iteration) < 0)
+                    ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+                if (fprintf(ofp, "@@ Included in MSA:        %d subsequences (query + %d subseqs from %d targets)\n",
+                            msa->nseq, msa->nseq - 1, kh->nkeys) < 0)
+                    ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+                if (fprintf(ofp, "@@ Model size:             %d positions\n", om->M) < 0)
+                    ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+                if (fprintf(ofp, "@@\n\n") < 0)
+                    ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+
+                prv_msa_nseq = msa->nseq;
+                esl_msa_Destroy(msa);
+            }
+            //fprintf(stderr, "Round %d:", iteration);
+            /* HMM checkpoint output */
+            if (esl_opt_IsOn(go, "--chkhmm")) {
+                checkpoint_hmm(nquery, hmm, esl_opt_GetString(go, "--chkhmm"), iteration);
+                p7_hmm_Destroy(hmm);
+                hmm = NULL;
+            }
+
+            /* Create new processing pipeline and top hits list; destroy old. (TODO: reuse rather than recreate) */
+            for (i = 0; i < infocnt; ++i) {
+                info[i].th  = p7_tophits_Create();
+                info[i].om  = p7_oprofile_Clone(om);
+                info[i].pli = p7_pipeline_Create(go, om->M, 400, FALSE, p7_SEARCH_SEQS);
+                /* 400 is a dummy length for now */
+                p7_pli_NewModel(info[i].pli, info[i].om, info[i].bg);
+
+                if (ncpus > 0) esl_threads_AddThread(threadObj, &info[i]);
+            }
+
+            esl_workqueue_Reset(queue);
+            esl_threads_WaitForStart(threadObj);
+
+            pthread_t *threads = malloc(sizeof(pthread_t) * dbfps.size);
+            THREAD_ARGS *thread_args  = malloc(sizeof(THREAD_ARGS) * dbfps.size);
+
+            for (i = 0; i < dbfps.size; i++) {
+                thread_args[i].queue = queue;
+                thread_args[i].dbfp  = dbfps.list[i];
+                if (pthread_create(&threads[i], NULL, thread_loop, &thread_args[i]) != 0) {
+                    p7_Fail("쑤레드 생성 실패");
+                }
+            }
+
+            for (i = 0; i < dbfps.size; i++) {
+                pthread_join(threads[i], NULL);
+            }
+
+            ESL_SQ_BLOCK *dummy_block = esl_sq_CreateDigitalBlock(1, abc);
+            int worker_count          = esl_threads_GetWorkerCount(threadObj);
+
+            while (worker_count) {
+                void *dummy;
+                status = esl_workqueue_ReaderUpdate(queue, dummy_block, &dummy);
+                if (status != eslOK) p7_Fail("Work queue reader failed");
+                worker_count--;
+                dummy_block = esl_sq_CreateDigitalBlock(1, abc);
+            }
+
+            esl_workqueue_ReaderUpdate(queue, dummy_block, NULL);
+            esl_threads_WaitForFinish(threadObj);
+            esl_workqueue_Complete(queue);
+
+            sstatus = eslEOF;
+
+            for (i = 0; i < dbfps.size; i++) {
+                switch (thread_args[i].status) {
+                case eslEFORMAT:
+                    p7_Fail("Parse failed (sequence file %s):\n%s\n",
+                            dbfps.list[i]->filename, esl_sqfile_GetErrorBuf(dbfps.list[i]));
+                    break;
+                case eslEOF:
+                    /* do nothing */
+                    break;
+                default:
+                    p7_Fail("Unexpected error %d reading sequence file %s",
+                            sstatus, dbfps.list[i]->filename);
+                }
+            }
+
+            /* merge the results of the search results */
+            for (i = 1; i < infocnt; ++i) {
+                p7_tophits_Merge(info[0].th, info[i].th);
+                p7_pipeline_Merge(info[0].pli, info[i].pli);
+
+                p7_pipeline_Destroy(info[i].pli);
+                p7_tophits_Destroy(info[i].th);
+                p7_oprofile_Destroy(info[i].om);
+            }
+
+            /* Print the results. */
+            p7_tophits_SortBySortkey(info->th);
+            p7_tophits_Threshold(info->th, info->pli);
+            if (esl_opt_IsOn(go, "--output_limit")) {
+                const int output_limit = esl_opt_GetInteger(go, "--output_limit");
+                if (output_limit > -1) {
+                    info->th->N = ESL_MIN(info->th->N, output_limit);
+                }
+            }
+            p7_tophits_CompareRanking(info->th, kh, &nnew_targets);
+            // p7_tophits_Targets(ofp, info->th, info->pli, textw); if (fprintf(ofp, "\n\n") < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+            // p7_tophits_Domains(ofp, info->th, info->pli, textw); if (fprintf(ofp, "\n\n") < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+
+            /* Create alignment of the top hits */
+            /* <&qsq, &qtr, 1> included in p7_tophits_Alignment args here => initial query is added to the msa at each round. */
+            p7_tophits_Alignment(info->th, abc, &qsq, &qtr, 1, p7_ALL_CONSENSUS_COLS, &msa);
+            esl_msa_Digitize(abc, msa,NULL);
+            esl_msa_FormatName(msa, "%s-i%d", qsq->name, iteration);
+            if (qsq->acc[0] != '\0') esl_msa_SetAccession(msa, qsq->acc, -1);
+            if (qsq->desc[0] != '\0') esl_msa_SetDesc(msa, qsq->desc, -1);
+            esl_msa_FormatAuthor(msa, "jackhmmer (HMMER %s)", HMMER_VERSION);
+
+            /* Optional checkpointing */
+            if (esl_opt_IsOn(go, "--chkali")) checkpoint_msa(nquery, msa, esl_opt_GetString(go, "--chkali"), iteration);
+
+            esl_stopwatch_Stop(w);
+            p7_pli_Statistics(ofp, info->pli, w);
+
+            // /* Convergence test */
+            // if (fprintf(ofp, "\n")                                             < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+            // if (fprintf(ofp, "@@ New targets included:   %d\n", nnew_targets)  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+            // if (fprintf(ofp, "@@ New alignment includes: %d subseqs (was %d), including original query\n",
+            //  msa->nseq, prv_msa_nseq)                                   < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+            // if (nnew_targets == 0 && msa->nseq <= prv_msa_nseq)
+            //   {
+            //     if (fprintf(ofp, "@@\n")                                       < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+            //     if (fprintf(ofp, "@@ CONVERGED (in %d rounds). \n", iteration) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+            //     if (fprintf(ofp, "@@\n\n")                                     < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+            //     break;
+            //   }
+            // else if (iteration < maxiterations)
+            //   { if (fprintf(ofp, "@@ Continuing to next round.\n\n")           < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed"); }
+
+
+            for (i =0; i < dbfps.size; i++) esl_sqfile_Position(dbfps.list[i], 0);
+            free(threads);
+            free(thread_args);
+        } /* end iteration loop */
+
+        /* Because we destroy/create the hitlist, om, pipeline, and msa above, rather than create/destroy,
+         * the results of the last iteration have carried through to us now, and we can output
+         * whatever final results we care to.
+         */
+        if (tblfp) p7_tophits_TabularTargets(tblfp, qsq->name, qsq->acc, info->th, info->pli, (nquery == 1));
+        if (domtblfp) p7_tophits_TabularDomains(domtblfp, qsq->name, qsq->acc, info->th, info->pli, (nquery == 1));
+        if (afp) {
+            if (esl_opt_IsOn(go, "--stockholm")) {
+                esl_msafile_Write(afp, msa, eslMSAFILE_STOCKHOLM);
+            } else if (esl_opt_IsOn(go, "--pfam")) {
+                if (textw != 0) {
+                    ESL_EXCEPTION_SYS(eslEWRITE, "Pfam alignment format requires unlimited output width");
+                }
+                esl_msafile_Write(afp, msa, eslMSAFILE_PFAM);
+            } else if (esl_opt_IsOn(go, "--a2m")) {
+                esl_msafile_Write(afp, msa, eslMSAFILE_A2M);
+            } else {
+                // default to selecting pfam vs. stockholm dased on output width
+                if (textw > 0) esl_msafile_Write(afp, msa, eslMSAFILE_STOCKHOLM);
+                else esl_msafile_Write(afp, msa, eslMSAFILE_PFAM);
+            }
+
+            if (fprintf(ofp, "# Alignment of %d hits satisfying inclusion thresholds saved to: %s\n", msa->nseq,
+                        esl_opt_GetString(go, "-A")) < 0)
+                ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+        }
+        if (fprintf(ofp, "//\n") < 0)
+            ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+
+        p7_pipeline_Destroy(info->pli);
+        p7_tophits_Destroy(info->th);
+        p7_oprofile_Destroy(info->om);
+
+        info->pli = NULL;
+        info->th  = NULL;
+        info->om  = NULL;
+
+        esl_msa_Destroy(msa);
+        p7_oprofile_Destroy(om);
+        p7_trace_Destroy(qtr);
+        esl_sq_Reuse(qsq);
+        esl_keyhash_Reuse(kh);
+        for (i =0; i < dbfps.size; i++) esl_sqfile_Position(dbfps.list[i], 0);
+    }
+    if (qstatus == eslEFORMAT)
+        p7_Fail("Parse failed (sequence file %s):\n%s\n",
+                qfp->filename, esl_sqfile_GetErrorBuf(qfp));
+    else if (qstatus != eslEOF)
+        p7_Fail("Unexpected error %d reading sequence file %s",
+                qstatus, qfp->filename);
+
+    /* Terminate outputs - any last words?
+     */
+    if (tblfp) p7_tophits_TabularTail(tblfp, "jackhmmer", p7_SEARCH_SEQS, cfg->qfile, cfg->dbfile, go);
+    if (domtblfp) p7_tophits_TabularTail(domtblfp, "jackhmmer", p7_SEARCH_SEQS, cfg->qfile, cfg->dbfile, go);
+    if (ofp && fprintf(ofp, "[ok]\n") < 0)
+        ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+
+    /* Cleanup - prepare for successful exit
+     */
+    for (i = 0; i < infocnt; ++i) p7_bg_Destroy(info[i].bg);
+
+    if (ncpus > 0) {
+        esl_workqueue_Reset(queue);
+        while (esl_workqueue_Remove(queue, (void **)&block) == eslOK) esl_sq_DestroyBlock(block);
+        esl_workqueue_Destroy(queue);
+        esl_threads_Destroy(threadObj);
+    }
+
+    free(info);
+
+    esl_keyhash_Destroy(kh);
+    esl_sqfile_Close(qfp);
+    for (i =0; i < dbfps.size; i++) esl_sqfile_Close(dbfps.list[i]);
+    esl_sq_Destroy(qsq);
+    esl_stopwatch_Destroy(w);
+    p7_builder_Destroy(bld);
+    esl_alphabet_Destroy(abc);
+    p7_bg_Destroy(bg);
+
+    if (ofp != stdout) fclose(ofp);
+    if (afp != NULL) fclose(afp);
+    if (tblfp != NULL) fclose(tblfp);
+    if (domtblfp != NULL) fclose(domtblfp);
+
+    return eslOK;
+
+ERROR:
+    return eslFAIL;
 }
 
 
@@ -750,10 +858,9 @@ checkpoint_hmm(int nquery, P7_HMM *hmm, char *basename, int iteration)
   if (nquery == 1) { if ((fp = fopen(filename, "w")) == NULL) p7_Fail("Failed to open HMM checkpoint file %s for writing\n", filename); }
   else             { if ((fp = fopen(filename, "a")) == NULL) p7_Fail("Failed to open HMM checkpoint file %s for append\n",  filename); }
   p7_hmmfile_WriteASCII(fp, -1, hmm);
-  
+
   fclose(fp);
   free(filename);
-  return;
 }
 
 
@@ -773,88 +880,55 @@ checkpoint_msa(int nquery, ESL_MSA *msa, char *basename, int iteration)
   if (nquery == 1) { if ((fp = fopen(filename, "w")) == NULL) p7_Fail("Failed to open MSA checkpoint file %s for writing\n", filename); }
   else             { if ((fp = fopen(filename, "a")) == NULL) p7_Fail("Failed to open MSA checkpoint file %s for append\n",  filename); }
   esl_msafile_Write(fp, msa, eslMSAFILE_PFAM);
-  
+
   fclose(fp);
   free(filename);
-  return;
 }
 
-static int
-serial_loop(WORKER_INFO *info, ESL_SQFILE *dbfp)
-{
-  int      sstatus;
-  ESL_SQ   *dbsq     = NULL;   /* one target sequence (digital)  */
 
-  dbsq = esl_sq_CreateDigital(info->om->abc);
+pthread_mutex_t reader_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define PROGRESS_TICK 10000
 
-  /* Main loop: */
-  while ((sstatus = esl_sqio_Read(dbfp, dbsq)) == eslOK)
-    {
-      p7_pli_NewSeq(info->pli, dbsq);
-      p7_bg_SetLength(info->bg, dbsq->n);
-      p7_oprofile_ReconfigLength(info->om, dbsq->n);
-      
-      p7_Pipeline(info->pli, info->om, info->bg, dbsq, NULL, info->th);
+static void *thread_loop(void *arg) {
+    int status  = eslOK;
+    int sstatus = eslOK;
+    void *newBlock;
 
-      esl_sq_Reuse(dbsq);
-      p7_pipeline_Reuse(info->pli);
+    int loop_count    = 0;
+
+    THREAD_ARGS *thread_args = arg;
+
+    ESL_WORK_QUEUE *queue = thread_args->queue;
+    ESL_SQFILE *dbfp      = thread_args->dbfp;
+
+    pthread_mutex_lock(&reader_mutex);
+    status = esl_workqueue_ReaderUpdate(queue, NULL, &newBlock);
+    pthread_mutex_unlock(&reader_mutex);
+
+    if (status != eslOK) p7_Fail("Work queue reader failed");
+
+    /* Main loop: */
+    while (sstatus == eslOK) {
+        ESL_SQ_BLOCK *block = newBlock;
+        sstatus             = esl_sqio_ReadBlock(dbfp, block, -1, -1, FALSE, FALSE);
+        if (sstatus == eslEOF) break; // 더 이상 읽을 데이터가 없음
+
+        pthread_mutex_lock(&reader_mutex);
+        status = esl_workqueue_ReaderUpdate(queue, block, &newBlock);
+        pthread_mutex_unlock(&reader_mutex);
+        if (status != eslOK) p7_Fail("Work queue reader failed");
+
+        loop_count++;
+        if (loop_count == PROGRESS_TICK) {
+            fprintf(stdout, "@%d\n", PROGRESS_TICK);
+            fflush(stdout);
+            loop_count = 0;
+        }
     }
 
-  esl_sq_Destroy(dbsq);
+    thread_args->status = sstatus;
 
-  return sstatus;
-}
-
-static int
-thread_loop(ESL_THREADS *obj, ESL_WORK_QUEUE *queue, ESL_SQFILE *dbfp)
-{
-  int  status  = eslOK;
-  int  sstatus = eslOK;
-  int  eofCount = 0;
-  ESL_SQ_BLOCK *block;
-  void         *newBlock;
-
-  int loop_count = 0;
-  int next_progress = 10000;
-
-  esl_workqueue_Reset(queue);
-  esl_threads_WaitForStart(obj);
-
-  status = esl_workqueue_ReaderUpdate(queue, NULL, &newBlock);
-  if (status != eslOK) p7_Fail("Work queue reader failed");
-      
-  /* Main loop: */
-  while (sstatus == eslOK) {
-	  block = (ESL_SQ_BLOCK *) newBlock;
-	  sstatus = esl_sqio_ReadBlock(dbfp, block, -1, -1, /*max_init_window=*/FALSE, FALSE);
-	  if (sstatus == eslEOF) {
-		  if (eofCount < esl_threads_GetWorkerCount(obj)) sstatus = eslOK;
-		  ++eofCount;
-	  }
-
-	  if (sstatus == eslOK) {
-		  status = esl_workqueue_ReaderUpdate(queue, block, &newBlock);
-		  if (status != eslOK) p7_Fail("Work queue reader failed");
-	    loop_count++;
-	    if (loop_count == next_progress) {
-	      fprintf(stdout, "@%d\n", loop_count);
-	      fflush(stdout);
-	      next_progress += 10000;
-	    }
-	  }
-  }
-
-  status = esl_workqueue_ReaderUpdate(queue, block, NULL);
-  if (status != eslOK) p7_Fail("Work queue reader failed");
-
-  if (sstatus == eslEOF)
-    {
-      /* wait for all the threads to complete */
-      esl_threads_WaitForFinish(obj);
-      esl_workqueue_Complete(queue);  
-    }
-
-  return sstatus;
+    return NULL;
 }
 
 static void
