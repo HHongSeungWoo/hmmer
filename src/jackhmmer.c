@@ -887,7 +887,7 @@ checkpoint_msa(int nquery, ESL_MSA *msa, char *basename, int iteration)
 
 
 pthread_mutex_t reader_mutex = PTHREAD_MUTEX_INITIALIZER;
-#define PROGRESS_TICK 10000
+#define PROGRESS_TICK 2000
 
 static void *thread_loop(void *arg) {
     int status  = eslOK;
